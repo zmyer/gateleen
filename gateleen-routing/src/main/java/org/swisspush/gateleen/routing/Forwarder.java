@@ -24,6 +24,9 @@ import java.util.Map;
 import java.util.concurrent.TimeoutException;
 import java.util.regex.Pattern;
 
+import static org.swisspush.gateleen.routing.PathProcessingStrategyFinder.PathProcessingStrategy.cleaned;
+import static org.swisspush.gateleen.routing.PathProcessingStrategyFinder.PathProcessingStrategy.unmodified;
+
 /**
  * Forwards requests to the backend.
  *
@@ -36,6 +39,7 @@ public class Forwarder implements Handler<RoutingContext> {
     private Pattern urlPattern;
     private String target;
     private Rule rule;
+    private PathProcessingStrategyFinder pathProcessingStrategyFinder;
     private String base64UsernamePassword;
     private LoggingResourceManager loggingResourceManager;
     private MonitoringHandler monitoringHandler;
@@ -49,10 +53,11 @@ public class Forwarder implements Handler<RoutingContext> {
     private static final String IF_NONE_MATCH_HEADER = "if-none-match";
     private static final String SELF_REQUEST_HEADER = "x-self-request";
 
-    public Forwarder(Vertx vertx, HttpClient client, Rule rule, final ResourceStorage storage, LoggingResourceManager loggingResourceManager, MonitoringHandler monitoringHandler, String userProfilePath) {
+    public Forwarder(Vertx vertx, HttpClient client, Rule rule, PathProcessingStrategyFinder pathProcessingStrategyFinder, final ResourceStorage storage, LoggingResourceManager loggingResourceManager, MonitoringHandler monitoringHandler, String userProfilePath) {
         this.vertx = vertx;
         this.client = client;
         this.rule = rule;
+        this.pathProcessingStrategyFinder = pathProcessingStrategyFinder;
         this.loggingResourceManager = loggingResourceManager;
         this.monitoringHandler = monitoringHandler;
         this.storage = storage;
@@ -107,9 +112,24 @@ public class Forwarder implements Handler<RoutingContext> {
     public void handle(final HttpServerRequest req, final Buffer bodyData) {
         monitoringHandler.updateRequestsMeter(target, req.uri());
         monitoringHandler.updateRequestPerRuleMonitoring(req, rule.getMetricName());
-        final String targetUri = urlPattern.matcher(req.uri()).replaceFirst(rule.getPath()).replaceAll("\\/\\/", "/");
+        String targetUri = urlPattern.matcher(req.uri()).replaceFirst(rule.getPath());
         final Logger log = RequestLoggerFactory.getLogger(Forwarder.class, req);
-        log.debug("Forwarding request: " + req.uri() + " to " + rule.getScheme() + "://" + target + targetUri + " with rule " + rule.getRuleIdentifier());
+
+        PathProcessingStrategyFinder.PathProcessingStrategy pathProcessingStrategy = pathProcessingStrategyFinder.getPathProcessingStrategy(req.headers());
+        if(cleaned == pathProcessingStrategy){
+            log.debug("about to clean request uri '" + targetUri + "'");
+            targetUri = targetUri.replaceAll("\\/\\/", "/");
+            log.debug("cleaned request uri is now '" + targetUri + "'");
+        } else if(unmodified == pathProcessingStrategy){
+            log.debug("not going to modify request uri '" + targetUri + "' because path processing strategy is '" + pathProcessingStrategy.name() + "'");
+        } else {
+            log.warn("not supported path processing strategy '"+pathProcessingStrategy.name()+"' for request uri '" + targetUri +
+                    "'. URI will be handled like '"+ unmodified.name()+"' path processing strategy");
+        }
+
+        final String finalTargetUri = targetUri;
+
+        log.debug("Forwarding request: " + req.uri() + " to " + rule.getScheme() + "://" + target + finalTargetUri + " with rule " + rule.getRuleIdentifier());
         final String userId = extractUserId(req, log);
 
         if (userId != null && rule.getProfile() != null && userProfilePath != null) {
@@ -126,10 +146,10 @@ public class Forwarder implements Handler<RoutingContext> {
                 } else {
                     log.debug("No profile information found in local storage for user '" + userId + "'");
                 }
-                handleRequest(req, bodyData, targetUri, log, profileHeaderMap);
+                handleRequest(req, bodyData, finalTargetUri, log, profileHeaderMap);
             });
         } else {
-            handleRequest(req, bodyData, targetUri, log, null);
+            handleRequest(req, bodyData, finalTargetUri, log, null);
         }
     }
 

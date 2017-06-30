@@ -1,11 +1,5 @@
 package org.swisspush.gateleen.hook;
 
-import org.swisspush.gateleen.logging.LoggingResourceManager;
-import org.swisspush.gateleen.monitoring.MonitoringHandler;
-import org.swisspush.gateleen.core.storage.ResourceStorage;
-import org.swisspush.gateleen.routing.Forwarder;
-import org.swisspush.gateleen.routing.Rule;
-import io.vertx.core.Handler;
 import io.vertx.core.Vertx;
 import io.vertx.core.buffer.Buffer;
 import io.vertx.core.http.HttpClient;
@@ -13,6 +7,13 @@ import io.vertx.core.http.HttpClientOptions;
 import io.vertx.core.http.HttpServerRequest;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.swisspush.gateleen.core.storage.ResourceStorage;
+import org.swisspush.gateleen.logging.LoggingResourceManager;
+import org.swisspush.gateleen.monitoring.MonitoringHandler;
+import org.swisspush.gateleen.routing.Forwarder;
+import org.swisspush.gateleen.routing.PathProcessingStrategyFinder;
+import org.swisspush.gateleen.routing.PathProcessingStrategyFinder.PathProcessingStrategy;
+import org.swisspush.gateleen.routing.Rule;
 
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -51,6 +52,22 @@ public class Route {
     private HttpClient client;
     private Forwarder forwarder;
     private HttpClient selfClient;
+    private PathProcessingStrategy pathProcessingStrategy;
+
+    public Route(Vertx vertx, ResourceStorage storage, LoggingResourceManager loggingResourceManager, MonitoringHandler monitoringHandler,
+                 String userProfilePath, HttpHook httpHook, String urlPattern, HttpClient selfClient) {
+        this(
+                vertx,
+                storage,
+                loggingResourceManager,
+                monitoringHandler,
+                userProfilePath,
+                httpHook,
+                urlPattern,
+                selfClient,
+                PathProcessingStrategy.cleaned
+        );
+    }
 
     /**
      * Creates a new instance of a Route.
@@ -63,7 +80,8 @@ public class Route {
      * @param httpHook httpHook
      * @param urlPattern - this can be a listener or a normal urlPattern (eg. for a route)
      */
-    public Route(Vertx vertx, ResourceStorage storage, LoggingResourceManager loggingResourceManager, MonitoringHandler monitoringHandler, String userProfilePath, HttpHook httpHook, String urlPattern, HttpClient selfClient) {
+    public Route(Vertx vertx, ResourceStorage storage, LoggingResourceManager loggingResourceManager, MonitoringHandler monitoringHandler,
+                 String userProfilePath, HttpHook httpHook, String urlPattern, HttpClient selfClient, PathProcessingStrategy pathProcessingStrategy) {
         this.vertx = vertx;
         this.storage = storage;
         this.loggingResourceManager = loggingResourceManager;
@@ -72,6 +90,7 @@ public class Route {
         this.httpHook = httpHook;
         this.urlPattern = urlPattern;
         this.selfClient = selfClient;
+        this.pathProcessingStrategy = pathProcessingStrategy;
 
         createRule();
 
@@ -84,7 +103,7 @@ public class Route {
      * Creates the forwarder for this hook.
      */
     private void createForwarder() {
-        forwarder = new Forwarder(vertx, client, rule, storage, loggingResourceManager, monitoringHandler, userProfilePath);
+        forwarder = new Forwarder(vertx, client, rule, new PathProcessingStrategyFinder(pathProcessingStrategy), storage, loggingResourceManager, monitoringHandler, userProfilePath);
     }
 
     /**

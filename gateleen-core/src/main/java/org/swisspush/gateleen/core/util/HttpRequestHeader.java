@@ -9,6 +9,7 @@ import io.vertx.core.MultiMap;
  */
 public enum HttpRequestHeader {
     CONTENT_LENGTH("Content-Length"),
+    PATH_PROCESSING_STRATEGY_HEADER("x-path-processing-strategy"),
     X_HOPS("x-hops");
 
     private final String name;

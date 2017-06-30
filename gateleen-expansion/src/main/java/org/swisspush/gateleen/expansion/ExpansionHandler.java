@@ -20,6 +20,8 @@ import org.swisspush.gateleen.core.util.ExpansionDeltaUtil.SlashHandling;
 import org.swisspush.gateleen.core.util.ResourceCollectionException;
 import org.swisspush.gateleen.core.util.ResponseStatusCodeLogUtil;
 import org.swisspush.gateleen.core.util.StatusCode;
+import org.swisspush.gateleen.routing.PathProcessingStrategyFinder;
+import org.swisspush.gateleen.routing.PathProcessingStrategyFinder.PathProcessingStrategy;
 import org.swisspush.gateleen.routing.Rule;
 import org.swisspush.gateleen.routing.RuleFeaturesProvider;
 import org.swisspush.gateleen.routing.RuleProvider;
@@ -101,6 +103,7 @@ public class ExpansionHandler implements RuleChangesObserver{
     private Map<String, Object> properties;
     private String serverRoot;
     private RuleProvider ruleProvider;
+    private PathProcessingStrategyFinder pathProcessingStrategyFinder;
 
     /**
      * A list of parameters, which are always removed
@@ -116,6 +119,19 @@ public class ExpansionHandler implements RuleChangesObserver{
 
     private RuleFeaturesProvider ruleFeaturesProvider = new RuleFeaturesProvider(new ArrayList<>());
 
+    public ExpansionHandler(Vertx vertx, final ResourceStorage storage, HttpClient httpClient, final Map<String, Object> properties,
+                            String serverRoot, final String rulesPath){
+        this(
+                vertx,
+                storage,
+                httpClient,
+                properties,
+                serverRoot,
+                rulesPath,
+                PathProcessingStrategy.cleaned
+        );
+    }
+
     /**
      * Creates a new instance of the ExpansionHandler.
      *
@@ -126,7 +142,8 @@ public class ExpansionHandler implements RuleChangesObserver{
      * @param serverRoot serverRoot
      * @param rulesPath rulesPath
      */
-    public ExpansionHandler(Vertx vertx, final ResourceStorage storage, HttpClient httpClient, final Map<String, Object> properties, String serverRoot, final String rulesPath) {
+    public ExpansionHandler(Vertx vertx, final ResourceStorage storage, HttpClient httpClient, final Map<String, Object> properties,
+                            String serverRoot, final String rulesPath, PathProcessingStrategy pathProcessingStrategy) {
         this.httpClient = httpClient;
         this.properties = properties;
         this.serverRoot = serverRoot;
@@ -136,6 +153,8 @@ public class ExpansionHandler implements RuleChangesObserver{
 
         this.ruleProvider = new RuleProvider(vertx, rulesPath, storage, properties);
         this.ruleProvider.registerObserver(this);
+
+        this.pathProcessingStrategyFinder = new PathProcessingStrategyFinder(pathProcessingStrategy);
     }
 
     @Override
@@ -699,6 +718,15 @@ public class ExpansionHandler implements RuleChangesObserver{
 
                         // if the child is not a collection, we remove the parameter
                         boolean collection = isCollection(childResourceName);
+
+                        //TODO complete slash handling
+                        SlashHandling slashHandling;
+                        PathProcessingStrategy pathProcessingStrategy = pathProcessingStrategyFinder.getPathProcessingStrategy(req.headers());
+                        if(PathProcessingStrategy.unmodified == pathProcessingStrategy){
+                            slashHandling = SlashHandling.KEEP;
+                        } else {
+                            slashHandling = SlashHandling.END_WITHOUT_SLASH;
+                        }
 
                         final String collectionURI = ExpansionDeltaUtil.constructRequestUri(targetUri, req.params(), parameter_to_remove_after_initial_request, childResourceName, SlashHandling.END_WITHOUT_SLASH);
                         makeResourceSubRequest((collection ? collectionURI : removeParameters(collectionURI)), req, recursionLevel - DECREMENT_BY_ONE, subRequestCounter, recursionHandlerType, parentHandler, collection);

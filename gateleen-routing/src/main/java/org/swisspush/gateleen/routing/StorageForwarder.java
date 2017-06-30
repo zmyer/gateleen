@@ -23,9 +23,13 @@ import io.vertx.core.json.JsonArray;
 import io.vertx.core.json.JsonObject;
 import io.vertx.ext.web.RoutingContext;
 import org.slf4j.Logger;
+import org.swisspush.gateleen.routing.PathProcessingStrategyFinder.PathProcessingStrategy;
 
 import java.util.Map;
 import java.util.regex.Pattern;
+
+import static org.swisspush.gateleen.routing.PathProcessingStrategyFinder.PathProcessingStrategy.cleaned;
+import static org.swisspush.gateleen.routing.PathProcessingStrategyFinder.PathProcessingStrategy.unmodified;
 
 /**
  * Forwards to storage through the event bus, bypassing the network layer.
@@ -41,10 +45,12 @@ public class StorageForwarder implements Handler<RoutingContext> {
     private LoggingResourceManager loggingResourceManager;
     private MonitoringHandler monitoringHandler;
     private CORSHandler corsHandler;
+    private PathProcessingStrategyFinder pathProcessingStrategyFinder;
 
-    public StorageForwarder(EventBus eventBus, Rule rule, LoggingResourceManager loggingResourceManager, MonitoringHandler monitoringHandler) {
+    public StorageForwarder(EventBus eventBus, Rule rule, PathProcessingStrategyFinder pathProcessingStrategyFinder, LoggingResourceManager loggingResourceManager, MonitoringHandler monitoringHandler) {
         this.eventBus = eventBus;
         this.rule = rule;
+        this.pathProcessingStrategyFinder = pathProcessingStrategyFinder;
         this.loggingResourceManager = loggingResourceManager;
         this.monitoringHandler = monitoringHandler;
         this.address = Address.storageAddress() + "-" + rule.getStorage();
@@ -55,8 +61,21 @@ public class StorageForwarder implements Handler<RoutingContext> {
     @Override
     public void handle(final RoutingContext ctx) {
         final LoggingHandler loggingHandler = new LoggingHandler(loggingResourceManager, ctx.request(), this.eventBus);
-        final String targetUri = urlPattern.matcher(ctx.request().uri()).replaceAll(rule.getPath()).replaceAll("\\/\\/", "/");
         final Logger log = RequestLoggerFactory.getLogger(StorageForwarder.class, ctx.request());
+        String targetUri = urlPattern.matcher(ctx.request().uri()).replaceAll(rule.getPath());
+
+        PathProcessingStrategy pathProcessingStrategy = pathProcessingStrategyFinder.getPathProcessingStrategy(ctx.request().headers());
+        if(cleaned == pathProcessingStrategy){
+            log.debug("about to clean request uri '" + targetUri + "'");
+            targetUri = targetUri.replaceAll("\\/\\/", "/");
+            log.debug("cleaned request uri is now '" + targetUri + "'");
+        } else if(unmodified == pathProcessingStrategy){
+            log.debug("not going to modify request uri '" + targetUri + "' because path processing strategy is '" + pathProcessingStrategy.name() + "'");
+        } else {
+            log.warn("not supported path processing strategy '"+pathProcessingStrategy.name()+"' for request uri '" + targetUri +
+                    "'. URI will be handled like '"+ unmodified.name()+"' path processing strategy");
+        }
+
         monitoringHandler.updateRequestsMeter("localhost", ctx.request().uri());
         monitoringHandler.updateRequestPerRuleMonitoring(ctx.request(), rule.getMetricName());
         final long startTime = monitoringHandler.startRequestMetricTracking(rule.getMetricName(), ctx.request().uri());

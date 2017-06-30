@@ -24,6 +24,7 @@ import org.swisspush.gateleen.core.storage.ResourceStorage;
 import org.swisspush.gateleen.core.util.*;
 import org.swisspush.gateleen.logging.LoggingResourceManager;
 import org.swisspush.gateleen.monitoring.MonitoringHandler;
+import org.swisspush.gateleen.routing.PathProcessingStrategyFinder.PathProcessingStrategy;
 import org.swisspush.gateleen.validation.ValidationException;
 
 import java.net.HttpCookie;
@@ -68,6 +69,8 @@ public class Router implements Refreshable, LoggableResource, ConfigurationResou
     private String configResourceUri;
     private ConfigurationResourceManager configurationResourceManager;
     private Integer requestHopsLimit = null;
+
+    private PathProcessingStrategyFinder pathProcessingStrategyFinder;
 
     public Router(Vertx vertx,
                   LocalMap<String, Object> sharedData,
@@ -132,6 +135,34 @@ public class Router implements Refreshable, LoggableResource, ConfigurationResou
                   String rulesPath,
                   String userProfilePath,
                   JsonObject info,
+                  PathProcessingStrategy pathProcessingStrategy,
+                  Handler<Void>... doneHandlers) {
+        this(vertx,
+                vertx.sharedData().<String, Object>getLocalMap(ROUTER_STATE_MAP),
+                storage,
+                properties,
+                loggingResourceManager,
+                monitoringHandler,
+                selfClient,
+                serverPath,
+                rulesPath,
+                userProfilePath,
+                info,
+                8989,
+                pathProcessingStrategy,
+                doneHandlers);
+    }
+
+    public Router(Vertx vertx,
+                  final ResourceStorage storage,
+                  final Map<String, Object> properties,
+                  LoggingResourceManager loggingResourceManager,
+                  MonitoringHandler monitoringHandler,
+                  HttpClient selfClient,
+                  String serverPath,
+                  String rulesPath,
+                  String userProfilePath,
+                  JsonObject info,
                   int storagePort,
                   Handler<Void>... doneHandlers) {
         this(vertx,
@@ -162,6 +193,36 @@ public class Router implements Refreshable, LoggableResource, ConfigurationResou
                   JsonObject info,
                   int storagePort,
                   Handler<Void>... doneHandlers) {
+        this(vertx,
+                vertx.sharedData().<String, Object>getLocalMap(ROUTER_STATE_MAP),
+                storage,
+                properties,
+                loggingResourceManager,
+                monitoringHandler,
+                selfClient,
+                serverPath,
+                rulesPath,
+                userProfilePath,
+                info,
+                storagePort,
+                null,
+                doneHandlers);
+    }
+
+    public Router(Vertx vertx,
+                  LocalMap<String, Object> sharedData,
+                  final ResourceStorage storage,
+                  final Map<String, Object> properties,
+                  LoggingResourceManager loggingResourceManager,
+                  MonitoringHandler monitoringHandler,
+                  HttpClient selfClient,
+                  String serverPath,
+                  String rulesPath,
+                  String userProfilePath,
+                  JsonObject info,
+                  int storagePort,
+                  PathProcessingStrategy pathProcessingStrategy,
+                  Handler<Void>... doneHandlers) {
         this.storage = storage;
         this.properties = properties;
         this.loggingResourceManager = loggingResourceManager;
@@ -175,6 +236,8 @@ public class Router implements Refreshable, LoggableResource, ConfigurationResou
         this.info = info;
         this.storagePort = storagePort;
         this.doneHandlers = doneHandlers;
+
+        this.pathProcessingStrategyFinder = new PathProcessingStrategyFinder(pathProcessingStrategy);
 
         routingRulesSchema = ResourcesUtils.loadResource("gateleen_routing_schema_routing_rules", true);
 
@@ -356,11 +419,11 @@ public class Router implements Refreshable, LoggableResource, ConfigurationResou
             if (rule.getPath() == null) {
                 forwarder = new NullForwarder(rule, loggingResourceManager, monitoringHandler, vertx.eventBus());
             } else if (rule.getStorage() != null) {
-                forwarder = new StorageForwarder(vertx.eventBus(), rule, loggingResourceManager, monitoringHandler);
+                forwarder = new StorageForwarder(vertx.eventBus(), rule, pathProcessingStrategyFinder, loggingResourceManager, monitoringHandler);
             } else if (rule.getScheme().equals("local")) {
-                forwarder = new Forwarder(vertx, selfClient, rule, this.storage, loggingResourceManager, monitoringHandler, userProfileUri);
+                forwarder = new Forwarder(vertx, selfClient, rule, pathProcessingStrategyFinder, this.storage, loggingResourceManager, monitoringHandler, userProfileUri);
             } else {
-                forwarder = new Forwarder(vertx, client, rule, this.storage, loggingResourceManager, monitoringHandler, userProfileUri);
+                forwarder = new Forwarder(vertx, client, rule, pathProcessingStrategyFinder, this.storage, loggingResourceManager, monitoringHandler, userProfileUri);
             }
 
             if (rule.getMethods() == null) {
