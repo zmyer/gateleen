@@ -1,5 +1,6 @@
 package org.swisspush.gateleen.core.http;
 
+import io.vertx.codegen.annotations.Nullable;
 import io.vertx.core.http.*;
 import org.swisspush.gateleen.core.util.StatusCode;
 import io.vertx.core.*;
@@ -75,11 +76,7 @@ public class LocalHttpServerResponse extends BufferBridge implements HttpServerR
         public HttpClientResponse bodyHandler(final Handler<Buffer> bodyHandler) {
             final Buffer body = Buffer.buffer();
             handler(body::appendBuffer);
-            endHandler(new VoidHandler() {
-                public void handle() {
-                    bodyHandler.handle(body);
-                }
-            });
+            endHandler(aVoid -> bodyHandler.handle(body));
             return this;
         }
 
@@ -89,6 +86,11 @@ public class LocalHttpServerResponse extends BufferBridge implements HttpServerR
         @Override
         public NetSocket netSocket() {
             throw new UnsupportedOperationException();
+        }
+
+        @Override
+        public HttpClientRequest request() {
+            return null;
         }
 
         @Override
@@ -233,6 +235,11 @@ public class LocalHttpServerResponse extends BufferBridge implements HttpServerR
     }
 
     @Override
+    public HttpServerResponse endHandler(@Nullable Handler<Void> handler) {
+        throw new UnsupportedOperationException();
+    }
+
+    @Override
     public HttpServerResponse write(Buffer chunk) {
         ensureBound();
         doWrite(chunk);
@@ -297,12 +304,22 @@ public class LocalHttpServerResponse extends BufferBridge implements HttpServerR
     }
 
     @Override
+    public HttpServerResponse sendFile(String filename, long offset) {
+        throw new UnsupportedOperationException();
+    }
+
+    @Override
     public HttpServerResponse sendFile(String filename, long offset, long length) {
         throw new UnsupportedOperationException();
     }
 
     @Override
     public HttpServerResponse sendFile(String filename, Handler<AsyncResult<Void>> resultHandler) {
+        throw new UnsupportedOperationException();
+    }
+
+    @Override
+    public HttpServerResponse sendFile(String filename, long offset, Handler<AsyncResult<Void>> resultHandler) {
         throw new UnsupportedOperationException();
     }
 
@@ -370,12 +387,22 @@ public class LocalHttpServerResponse extends BufferBridge implements HttpServerR
     }
 
     @Override
+    public void reset() {
+
+    }
+
+    @Override
     public void reset(long code) {
         throw new UnsupportedOperationException();
     }
 
     @Override
     public HttpServerResponse writeCustomFrame(int type, int flags, Buffer payload) {
+        throw new UnsupportedOperationException();
+    }
+
+    @Override
+    public HttpServerResponse writeCustomFrame(HttpFrame frame) {
         throw new UnsupportedOperationException();
     }
 

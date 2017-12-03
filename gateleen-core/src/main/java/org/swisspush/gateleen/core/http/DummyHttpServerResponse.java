@@ -1,10 +1,12 @@
 package org.swisspush.gateleen.core.http;
 
+import io.vertx.codegen.annotations.Nullable;
 import io.vertx.core.AsyncResult;
 import io.vertx.core.Handler;
 import io.vertx.core.MultiMap;
 import io.vertx.core.buffer.Buffer;
 import io.vertx.core.http.CaseInsensitiveHeaders;
+import io.vertx.core.http.HttpFrame;
 import io.vertx.core.http.HttpMethod;
 import io.vertx.core.http.HttpServerResponse;
 
@@ -96,6 +98,11 @@ public class DummyHttpServerResponse implements HttpServerResponse {
         throw new UnsupportedOperationException();
     }
 
+    @Override
+    public HttpServerResponse endHandler(@Nullable Handler<Void> handler) {
+        throw new UnsupportedOperationException();
+    }
+
     @Override public HttpServerResponse write(Buffer chunk) {
         throw new UnsupportedOperationException();
     }
@@ -128,11 +135,21 @@ public class DummyHttpServerResponse implements HttpServerResponse {
         throw new UnsupportedOperationException();
     }
 
+    @Override
+    public HttpServerResponse sendFile(String filename, long offset) {
+        throw new UnsupportedOperationException();
+    }
+
     @Override public HttpServerResponse sendFile(String filename, long offset, long length) {
         throw new UnsupportedOperationException();
     }
 
     @Override public HttpServerResponse sendFile(String filename, Handler<AsyncResult<Void>> resultHandler) {
+        throw new UnsupportedOperationException();
+    }
+
+    @Override
+    public HttpServerResponse sendFile(String filename, long offset, Handler<AsyncResult<Void>> resultHandler) {
         throw new UnsupportedOperationException();
     }
 
@@ -181,10 +198,20 @@ public class DummyHttpServerResponse implements HttpServerResponse {
     }
 
     @Override
+    public void reset() {
+
+    }
+
+    @Override
     public void reset(long code) { throw new UnsupportedOperationException(); }
 
     @Override
     public HttpServerResponse writeCustomFrame(int type, int flags, Buffer payload) {
+        throw new UnsupportedOperationException();
+    }
+
+    @Override
+    public HttpServerResponse writeCustomFrame(HttpFrame frame) {
         throw new UnsupportedOperationException();
     }
 

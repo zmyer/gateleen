@@ -9,6 +9,7 @@ import io.vertx.core.net.NetSocket;
 import io.vertx.core.net.SocketAddress;
 
 import javax.net.ssl.SSLPeerUnverifiedException;
+import javax.net.ssl.SSLSession;
 import javax.security.cert.X509Certificate;
 
 /**
@@ -80,6 +81,11 @@ public class HttpServerRequestMock implements HttpServerRequest {
 
     @Override public SocketAddress localAddress() {
         return null;
+    }
+
+    @Override
+    public SSLSession sslSession() {
+        throw new UnsupportedOperationException();
     }
 
     @Override public X509Certificate[] peerCertificateChain() throws SSLPeerUnverifiedException {
