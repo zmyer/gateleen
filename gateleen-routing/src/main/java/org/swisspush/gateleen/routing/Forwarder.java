@@ -272,7 +272,15 @@ public class Forwarder implements Handler<RoutingContext> {
 
             final LoggingWriteStream loggingWriteStream = new LoggingWriteStream(cReqWrapped, loggingHandler, true);
             final Pump pump = Pump.pump(req, loggingWriteStream);
-            req.endHandler(v -> cReq.end());
+            if (req.isEnded()) {
+                // since Vert.x 3.6.0 it can happen that requests without body (e.g. a GET) are ended even while in paused-State
+                // Setting the endHandler would then lead to an Exception
+                // see also https://github.com/eclipse-vertx/vert.x/issues/2763
+                // so we now check if the request already is ended before installing an endHandler
+                cReq.end();
+            } else {
+                req.endHandler(v -> cReq.end());
+            }
             req.exceptionHandler(t -> {
                 RequestLoggerFactory
                         .getLogger(Forwarder.class, req)
@@ -306,14 +314,7 @@ public class Forwarder implements Handler<RoutingContext> {
             monitoringHandler.stopRequestMetricTracking(rule.getMetricName(), startTime, req.uri());
             if (exception instanceof TimeoutException) {
                 error("Timeout", req, targetUri);
-                req.response().setStatusCode(StatusCode.TIMEOUT.getStatusCode());
-                req.response().setStatusMessage(StatusCode.TIMEOUT.getStatusMessage());
-                try {
-                    ResponseStatusCodeLogUtil.info(req, StatusCode.TIMEOUT, Forwarder.class);
-                    req.response().end(req.response().getStatusMessage());
-                } catch (IllegalStateException e) {
-                    // ignore because maybe already closed
-                }
+                respondError(req, StatusCode.TIMEOUT);
             } else {
                 error(exception.getMessage(), req, targetUri);
                 if (req.response().ended() || req.response().headWritten()) {
@@ -321,15 +322,7 @@ public class Forwarder implements Handler<RoutingContext> {
                     req.response().close();
                     return;
                 }
-
-                req.response().setStatusCode(StatusCode.SERVICE_UNAVAILABLE.getStatusCode());
-                req.response().setStatusMessage(StatusCode.SERVICE_UNAVAILABLE.getStatusMessage());
-                try {
-                    ResponseStatusCodeLogUtil.info(req, StatusCode.SERVICE_UNAVAILABLE, Forwarder.class);
-                    req.response().end(req.response().getStatusMessage());
-                } catch (IllegalStateException e) {
-                    // ignore because maybe already closed
-                }
+                respondError(req, StatusCode.SERVICE_UNAVAILABLE);
             }
         });
     }
@@ -364,7 +357,9 @@ public class Forwarder implements Handler<RoutingContext> {
             if (profileHeaderMap != null && !profileHeaderMap.isEmpty()) {
                 req.response().headers().addAll(profileHeaderMap);
             }
-            if (!req.response().headers().contains("Content-Length")) {
+            // if we receive a chunked transfer then we also use chunked
+            // otherwise, upstream must have sent a Content-Length - or no body at all (e.g. for "304 not modified" responses)
+            if (req.response().headers().contains(HttpHeaders.TRANSFER_ENCODING, "chunked", true)) {
                 req.response().setChunked(true);
             }
 
@@ -381,18 +376,39 @@ public class Forwarder implements Handler<RoutingContext> {
             });
             pump.start();
 
+            Runnable unpump = () -> {
+                // disconnect the clientResponse from the Pump and resume this (probably paused-by-pump) stream to keep it alive
+                pump.stop();
+                cRes.handler(buf -> {
+                    // drain to nothing
+                });
+                cRes.resume(); // resume the (probably paused) stream
+            };
+
             cRes.exceptionHandler(exception -> {
+                unpump.run();
                 error("Problem with backend: " + exception.getMessage(), req, targetUri);
-                req.response().setStatusCode(StatusCode.INTERNAL_SERVER_ERROR.getStatusCode());
-                req.response().setStatusMessage(StatusCode.INTERNAL_SERVER_ERROR.getStatusMessage());
-                try {
-                    ResponseStatusCodeLogUtil.info(req, StatusCode.INTERNAL_SERVER_ERROR, Forwarder.class);
-                    req.response().end(req.response().getStatusMessage());
-                } catch (IllegalStateException e) {
-                    // ignore because maybe already closed
-                }
+                respondError(req, StatusCode.INTERNAL_SERVER_ERROR);
+            });
+            req.connection().closeHandler((aVoid) -> {
+                unpump.run();
             });
         });
+    }
+
+    private void respondError(HttpServerRequest req, StatusCode statusCode) {
+        try {
+            ResponseStatusCodeLogUtil.info(req, statusCode, Forwarder.class);
+
+            String msg = statusCode.getStatusMessage();
+            req.response()
+                    .setStatusCode(statusCode.getStatusCode())
+                    .setStatusMessage(msg)
+                    .end(msg);
+        } catch (IllegalStateException ex) {
+            // (nearly) ignore because underlying connection maybe already closed
+            RequestLoggerFactory.getLogger(Forwarder.class, req).info("IllegalStateException while sending error response for {}", req.uri(), ex);
+        }
     }
 
     private void error(String message, HttpServerRequest request, String uri) {

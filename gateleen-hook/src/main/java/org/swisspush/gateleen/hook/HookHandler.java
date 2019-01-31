@@ -1,16 +1,16 @@
 package org.swisspush.gateleen.hook;
 
 import com.fasterxml.jackson.databind.JsonNode;
-import com.github.fge.jsonschema.util.JsonLoader;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.networknt.schema.JsonSchema;
 import com.networknt.schema.JsonSchemaFactory;
 import com.networknt.schema.ValidationMessage;
 import io.vertx.core.Handler;
-import io.vertx.core.MultiMap;
 import io.vertx.core.Vertx;
 import io.vertx.core.buffer.Buffer;
 import io.vertx.core.eventbus.Message;
 import io.vertx.core.http.*;
+import io.vertx.core.http.impl.headers.VertxHttpHeaders;
 import io.vertx.core.json.DecodeException;
 import io.vertx.core.json.JsonArray;
 import io.vertx.core.json.JsonObject;
@@ -33,6 +33,7 @@ import org.swisspush.gateleen.logging.LoggingResourceManager;
 import org.swisspush.gateleen.monitoring.MonitoringHandler;
 import org.swisspush.gateleen.queue.expiry.ExpiryCheckHandler;
 import org.swisspush.gateleen.queue.queuing.QueueClient;
+import org.swisspush.gateleen.queue.queuing.QueueProcessor;
 import org.swisspush.gateleen.queue.queuing.RequestQueue;
 import org.swisspush.gateleen.routing.Rule;
 
@@ -86,6 +87,8 @@ public class HookHandler implements LoggableResource {
 
     private final Comparator<String> collectionContentComparator;
     private static final Logger log = LoggerFactory.getLogger(HookHandler.class);
+
+    private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper();
 
     private Vertx vertx;
     private final ResourceStorage userProfileStorage;
@@ -704,7 +707,7 @@ public class HookHandler implements LoggableResource {
 
             // Create a new multimap, copied from the original request,
             // so that the original request is not overridden with the new values.
-            MultiMap queueHeaders = new CaseInsensitiveHeaders();
+            VertxHttpHeaders queueHeaders = new VertxHttpHeaders();
             queueHeaders.addAll(request.headers());
 
             // Apply the header manipulation chain - errors (unresolvable references) will just be WARN logged - but we still enqueue
@@ -812,7 +815,7 @@ public class HookHandler implements LoggableResource {
                         route.forward(request, buffer);
                     } else {
                         // mark the original request as hooked
-                        request.headers().add(HOOKED_HEADER, "true");
+                        request.headers().set(HOOKED_HEADER, "true");
 
                         /*
                          * self requests are only made for original
@@ -1004,7 +1007,7 @@ public class HookHandler implements LoggableResource {
         log.debug("handleListenerRegistration > " + request.uri());
 
         request.bodyHandler(hookData -> {
-            if(isHookJsonInvalid(request, hookData)) {
+            if (isListenerJsonInvalid(request, hookData)) {
                 return;
             }
 
@@ -1061,9 +1064,38 @@ public class HookHandler implements LoggableResource {
         });
     }
 
+    private boolean isListenerJsonInvalid(HttpServerRequest request, Buffer hookData) {
+        if (isHookJsonInvalid(request, hookData)) {
+            // No further checks required. hook definitively is invalid.
+            return true;
+        }
+
+        final JsonObject hook;
+        try {
+            // Badly we need to parse that JSON one more time.
+            hook = new JsonObject(hookData);
+        } catch (DecodeException e) {
+            log.error("Cannot decode JSON", e);
+            badRequest(request, "Cannot decode JSON", e.getMessage());
+            return true;
+        }
+        final JsonArray methods = hook.getJsonArray("methods");
+        if (methods != null) {
+            for (Object method : methods) {
+                if (!QueueProcessor.httpMethodIsQueueable(HttpMethod.valueOf((String) method))) {
+                    final String msg = "Listener registration request tries to hook for not allowed '" + method + "' method.";
+                    log.error(msg);
+                    badRequest(request, "Bad Request", msg + "\n");
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
     public boolean isHookJsonInvalid(HttpServerRequest request, Buffer hookData) {
         try {
-            JsonNode hook = JsonLoader.fromString(hookData.toString());
+            JsonNode hook = OBJECT_MAPPER.readTree(hookData.getBytes());
             final Set<ValidationMessage> valMsgs = jsonSchemaHook.validate(hook);
             if (valMsgs.size() > 0) {
                 badRequest(request, "Hook JSON invalid", valMsgs.toString());
@@ -1396,8 +1428,44 @@ public class HookHandler implements LoggableResource {
         // Configure connection pool size
         hook.setConnectionPoolSize(jsonHook.getInteger(HttpHook.CONNECTION_POOL_SIZE_PROPERTY_NAME));
 
-        routeRepository.addRoute(routedUrl, createRoute(routedUrl, hook));
+        boolean mustCreateNewRoute = true;
+        Route existingRoute = routeRepository.getRoutes().get(routedUrl);
+        if (existingRoute != null) {
+            mustCreateNewRoute = mustCreateNewRouteForHook(existingRoute, hook);
+        }
+        if (mustCreateNewRoute) {
+            routeRepository.addRoute(routedUrl, createRoute(routedUrl, hook));
+        } else {
+            // see comment in #mustCreateNewRouteForHook()
+            existingRoute.getRule().setHeaderFunction(hook.getHeaderFunction());
+            existingRoute.getHook().setExpirationTime(hook.getExpirationTime().orElse(null));
+        }
         monitoringHandler.updateRoutesCount(routeRepository.getRoutes().size());
+    }
+
+    /**
+     * check if an existing route must be thrown away because the new Hook does not match the config of the exising Route
+     *
+     * @param existingRoute
+     * @param newHook
+     * @return true if something is different between old existing Route and new hook
+     */
+    private boolean mustCreateNewRouteForHook(Route existingRoute, HttpHook newHook) {
+        HttpHook oldHook = existingRoute.getHook();
+        boolean same;
+        same  = Objects.equals(oldHook.getDestination()       ,       newHook.getDestination       ());
+        same &= Objects.equals(oldHook.getMethods           (),       newHook.getMethods           ());
+        same &=                oldHook.isCollection         () ==     newHook.isCollection         () ;
+        same &=                oldHook.isFullUrl            () ==     newHook.isFullUrl            () ;
+        same &=                oldHook.isListable           () ==     newHook.isListable           () ;
+        same &=                oldHook.isCollection         () ==     newHook.isCollection         () ;
+        same &=                oldHook.isCollection         () ==     newHook.isCollection         () ;
+        same &= Objects.equals(oldHook.getConnectionPoolSize() ,      newHook.getConnectionPoolSize());
+
+        // queueingStrategy, filter, queueExpireAfter and hookTriggerType are not relevant for Route-Hooks
+        // Though, headerFunction WOULD BE relevant - but we can't compare them for equality
+        // so we simply set the new HeaderFunction to the exising Rule
+        return !same;
     }
 
     /**
